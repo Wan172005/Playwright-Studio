@@ -1,0 +1,37 @@
+services:
+  playwright-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local/playwright-recorder-studio:1.0.0
+    container_name: playwright-recorder-studio
+    init: true
+    ipc: host
+    working_dir: /work
+    environment:
+      DISPLAY: ":99"
+      MANAGER_PORT: "8080"
+      UI_MODE_PORT: "9323"
+      NOVNC_PORT: "6080"
+      STUDIO_DATA_DIR: /work/.studio
+      SCRIPTS_DIR: /work/.studio/scripts
+      LOCAL_SCRIPTS_DIR: /work/tests-scripts
+      BACKUP_DIR: /backups
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - ./:/work
+      - playwright_node_modules:/work/node_modules
+      - playwright_data:/work/.studio
+      - playwright_scripts:/work/.studio/scripts
+      - ${STUDIO_BACKUP_DIR:-../playwright-studio-backups}:/backups
+    ports:
+      # Local access only: Manager, noVNC and Playwright UI do not require sign-in.
+      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:9323:9323"
+      - "127.0.0.1:6080:6080"
+    restart: unless-stopped
+
+volumes:
+  playwright_node_modules:
+  playwright_scripts:
+  playwright_data:

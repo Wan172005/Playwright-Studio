@@ -1,0 +1,174 @@
+'use strict';
+// Run inside the application's Docker image. All test data lives in an isolated temporary directory.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { once } = require('node:events');
+const { chromium, expect } = require('@playwright/test');
+const { createStudioServer } = require('../server');
+(async () => {
+  const root = fs.mkdtempSync('/tmp/studio-browser-');
+  fs.symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
+  const app = createStudioServer({ dataDir: path.join(root, 'data'), scriptsDir: path.join(root, 'tests-scripts'), localScriptsDir: path.join(root, 'local/tests-scripts'), backupDir: path.join(root, 'backups'), artifactsDir: path.join(root, 'artifacts'), uiPort: 19323 });
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const page = await browser.newPage({ viewport: { width: 1720, height: 1040 } });
+  const errors = [];
+  let stateResponses = 0;
+  page.on('response', response => { if (new URL(response.url()).pathname === '/api/state') stateResponses++; });
+  page.on('pageerror', error => { errors.push(error.message); console.log('PAGE ERROR:', error.message); });
+  page.on('requestfailed', request => console.log('REQUEST FAILED:', request.url(), request.failure()));
+  page.on('console', message => { if (message.type() === 'error') console.log('BROWSER ERROR:', message.text()); });
+  app.server.listen(18080, '127.0.0.1'); await once(app.server, 'listening');
+  app.startUi();
+  const base = 'http://127.0.0.1:18080';
+  const output = path.resolve('output'); fs.mkdirSync(output, { recursive: true });
+  try {
+    // Warm the native UI/config before any project exists. Creating a project must work after this load too.
+    await expect.poll(async () => {
+      try { return (await fetch('http://127.0.0.1:19323', { redirect: 'manual' })).status; }
+      catch { return 0; }
+    }, { timeout: 15000 }).toBe(302);
+    await page.goto(`${base}/playwright/`);
+    await expect(page.getByText('No tests', { exact: true })).toBeVisible({ timeout: 15000 });
+    await page.goto(base);
+    await expect(page.getByRole('heading', { name: 'Tạo project đầu tiên' })).toBeVisible();
+    await page.screenshot({ path: path.join(output, 'manager-first-project.png'), fullPage: true });
+    await page.locator('#first-name').fill('Practice Automation');
+    await page.locator('#first-url').fill('https://example.com');
+    await page.locator('#first-project-form').getByRole('button', { name: 'Tạo project', exact: true }).click();
+    await expect(page.locator('#project-name')).toHaveText('Practice Automation');
+    const a = app.store.projects()[0];
+    const b = app.store.createProject({ name: 'Shop Demo', url: 'https://example.com' });
+    const source = title => `import { test, expect } from '@playwright/test';\ntest(${JSON.stringify(title)}, async () => { expect(true).toBe(true); });\n`;
+    const script = app.store.saveScript(app.store.target(a.id, 'Đăng nhập [OK].ts'), 'Đăng nhập thành công', 'https://example.com', source('Đăng nhập thành công'));
+    app.store.saveScript(app.store.target(a.id, 'Sai mật khẩu'), 'Sai mật khẩu', 'https://example.com', source('Sai mật khẩu'));
+    app.store.saveScript(app.store.target(b.id, 'Đăng nhập [OK].ts'), 'Wrong project marker', 'https://example.com', source('Wrong project marker'));
+    app.store.backup();
+    await expect(page.locator('#script-count')).toHaveText('2');
+    const options = page.locator('#scripts tr').filter({ hasText: script.filename }).locator('details');
+    await options.locator('summary').click();
+    const menuSource = options.getByRole('button', { name: 'Xem nội dung', exact: true });
+    await menuSource.focus();
+    await page.evaluate(() => { window.menuBeforePoll = document.querySelector('#scripts details[open]'); });
+    const responsesBefore = stateResponses;
+    await expect.poll(() => stateResponses, { timeout: 10000 }).toBeGreaterThanOrEqual(responsesBefore + 4);
+    await expect(options).toHaveAttribute('open', '');
+    await expect(menuSource).toBeFocused();
+    assert.ok(await page.evaluate(() => window.menuBeforePoll === document.querySelector('#scripts details[open]')), 'Polling reuses the open menu DOM');
+    // Relative date/data changes must preserve menu state and keyboard focus too.
+    app.store.db.prepare('UPDATE scripts SET updatedAt=? WHERE id=?').run(new Date(Date.now() - 8 * 60000).toISOString(), script.id);
+    await expect(page.locator('#scripts tr').filter({ hasText: script.filename }).locator('.date-cell')).toHaveText('8 phút trước', { timeout: 10000 });
+    await expect(options).toHaveAttribute('open', '');
+    await expect(menuSource).toBeFocused();
+    await menuSource.click();
+    await expect(page.locator('#source-drawer')).toBeVisible();
+    await page.getByRole('button', { name: 'Đóng nội dung', exact: true }).click();
+    await page.getByRole('button', { name: 'Tạo test script', exact: true }).click();
+    await page.locator('#script-name').fill('Đăng nhập [OK].ts');
+    await expect(page.locator('#filename-preview')).toHaveText('File: Đăng nhập [OK].ts');
+    await page.screenshot({ path: path.join(output, 'manager-project.png'), fullPage: true });
+    await page.locator('#start-script').click();
+    await expect(page.locator('#confirm-dialog')).toBeVisible();
+    await expect(page.locator('#confirm-message')).toContainText('đã tồn tại');
+    await page.screenshot({ path: path.join(output, 'manager-overwrite.png'), fullPage: true });
+    await page.locator('#confirm-cancel').click();
+    assert.equal(app.state.session, null);
+    assert.equal(fs.readFileSync(app.store.scriptPath(script), 'utf8'), source('Đăng nhập thành công'));
+    await page.getByRole('button', { name: 'Đóng form', exact: true }).click();
+    await page.locator('#search').fill('Sai mật khẩu');
+    await expect(page.locator('#scripts tr')).toHaveCount(1);
+    await page.locator('#search').fill('');
+    await page.getByRole('button', { name: 'Đăng nhập thành công', exact: true }).click();
+    await expect(page.locator('#source-code')).toContainText('Đăng nhập thành công');
+    await page.getByRole('button', { name: 'Đóng nội dung', exact: true }).click();
+    // Exercise the real headed Codegen, including confirmed overwrite and SIGINT flush.
+    const before = fs.readFileSync(app.store.scriptPath(script), 'utf8');
+    await page.getByRole('button', { name: 'Tạo test script', exact: true }).click();
+    await page.locator('#script-name').fill('Đăng nhập [OK].ts');
+    await page.locator('#script-url').fill(base);
+    await page.locator('#start-script').click();
+    await expect(page.locator('#confirm-dialog')).toBeVisible();
+    await page.locator('#confirm-accept').click();
+    await expect(page.locator('#session-banner')).toBeVisible();
+    assert.equal(fs.readFileSync(app.store.scriptPath(script), 'utf8'), before);
+    await expect.poll(() => app.state.session && fs.existsSync(app.state.session.draft) && fs.readFileSync(app.state.session.draft, 'utf8').includes('page.goto'), { timeout: 20000 }).toBeTruthy();
+    await page.locator('#stop-script').click();
+    await expect(page.locator('#session-banner')).toBeHidden({ timeout: 20000 });
+    const generated = fs.readFileSync(app.store.scriptPath(script), 'utf8');
+    assert.ok(generated.includes('test("Đăng nhập [OK]",'));
+    assert.ok(generated.includes('page.goto(webUrl('));
+    assert.notEqual(generated, before);
+    assert.equal(app.store.backupStatus().pending, false);
+    assert.equal(fs.readFileSync(path.join(root, 'local/tests-scripts/Practice Automation', script.filename), 'utf8'), generated);
+    const archivedOriginal = fs.readdirSync(path.join(root, 'backups')).some(dir => {
+      const file = path.join(root, 'backups', dir, 'tests-scripts', a.id, script.filename);
+      return fs.existsSync(file) && fs.readFileSync(file, 'utf8') === before;
+    });
+    assert.ok(archivedOriginal, 'Previous version archived before overwrite');
+    assert.ok(generated.includes('data("URL_1")'));
+    const defaultId = app.store.get(`defaultEnvironment:${a.id}`);
+    assert.equal(app.store.environment(defaultId, a.id).variables.URL_1, '/');
+    // The default native project must receive the newly created shared dataset too.
+    const generatedResponse = await page.request.post(`${base}/api/scripts/${script.id}/open-ui`, { data: {} });
+    const generatedUi = await browser.newPage();
+    await generatedUi.goto(base + (await generatedResponse.json()).url);
+    await expect(generatedUi.locator('[data-testid="status-line"]')).toContainText('1 passed', { timeout: 30000 });
+    await generatedUi.close();
+    // Use a deterministic test for the native UI selection/run assertion below.
+    app.store.saveScript(app.store.target(a.id, script.filename, require('../store').hash(generated)), script.name, base, source('Đăng nhập thành công'));
+    app.store.backup();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: path.join(output, 'manager-mobile.png'), fullPage: true });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal page overflow on mobile');
+    await page.setViewportSize({ width: 1720, height: 1040 });
+    const row = page.locator('#scripts tr').filter({ hasText: 'Đăng nhập [OK].ts' });
+    const runButton = row.getByRole('button', { name: 'Chạy trong UI', exact: true });
+    await page.evaluate(() => { window.originalOpen = window.open; window.open = () => null; });
+    await runButton.click();
+    await expect(page.locator('#toast')).toContainText('chặn tab mới');
+    assert.equal(page.url(), `${base}/`);
+    await page.evaluate(() => { window.open = window.originalOpen; });
+    await page.route('**/api/scripts/*/open-ui', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'UI temporarily unavailable' }) }));
+    const [failedTab] = await Promise.all([page.waitForEvent('popup'), runButton.click()]);
+    await expect.poll(() => failedTab.isClosed()).toBe(true);
+    await expect(runButton).toBeEnabled();
+    await expect(page.locator('#toast')).toHaveText('UI temporarily unavailable');
+    await page.unroute('**/api/scripts/*/open-ui');
+    const [uiPage] = await Promise.all([page.waitForEvent('popup'), runButton.click()]);
+    uiPage.on('pageerror', error => errors.push(error.message));
+    await uiPage.waitForURL(/\/playwright\/.+\/trace\/uiMode\.html/);
+    assert.equal(page.url(), `${base}/`, 'Manager remains in its original tab');
+    assert.ok(await uiPage.evaluate(() => window.opener === null), 'Native UI has no opener access');
+    await expect(runButton).toBeEnabled();
+    await expect(uiPage.locator('[data-testid="test-tree"]')).toBeVisible({ timeout: 30000 });
+    await expect(uiPage.locator('[data-testid="test-tree"]')).toContainText('Đăng nhập [OK].ts');
+    await expect(uiPage.locator('[data-testid="test-tree"]')).not.toContainText('Wrong project marker');
+    await expect(uiPage.locator('[data-testid="test-tree"]')).not.toContainText('Sai mật khẩu');
+    await expect(uiPage.locator('[data-testid="status-line"]')).toContainText('1 passed', { timeout: 30000 });
+    await uiPage.screenshot({ path: path.join(output, 'playwright-selected-script.png'), fullPage: true });
+    const selected = await uiPage.locator('[data-testid="test-tree"] [aria-selected="true"]').count();
+    assert.ok(selected > 0, 'Selected script in native UI');
+    assert.equal(new URL(uiPage.url()).searchParams.get('studioRun'), '0');
+    await uiPage.close();
+    // Reuse the browser's saved native UI project filters while switching to another project with the same filename.
+    await page.bringToFront();
+    await page.locator('#projects').getByRole('button', { name: 'Shop Demo', exact: true }).click();
+    await expect(page.locator('#project-name')).toHaveText('Shop Demo');
+    const [otherUiPage] = await Promise.all([page.waitForEvent('popup'), page.locator('#scripts').getByRole('button', { name: 'Chạy trong UI', exact: true }).click()]);
+    otherUiPage.on('pageerror', error => errors.push(error.message));
+    await otherUiPage.waitForURL(/\/playwright\/.+\/trace\/uiMode\.html/);
+    await expect(otherUiPage.locator('[data-testid="test-tree"]')).toContainText('Wrong project marker', { timeout: 30000 });
+    await expect(otherUiPage.locator('[data-testid="test-tree"]')).not.toContainText('Đăng nhập thành công');
+    await expect(otherUiPage.locator('[data-testid="status-line"]')).toContainText('1 passed', { timeout: 30000 });
+    assert.deepEqual(errors, []);
+    fs.rmSync(path.join(output, 'manager-qa-failure.png'), { force: true });
+    console.log('BROWSER QA PASSED: stable menus across polling/data changes, new UI tabs, popup/API failure handling, onboarding, overwrite, Codegen, backup, mobile, exact native project/file selection and execution.');
+  } catch (error) {
+    await page.screenshot({ path: path.join(output, 'manager-qa-failure.png'), fullPage: true });
+    console.error('URL:', page.url()); console.error((await page.locator('body').innerText()).slice(0, 7000)); throw error;
+  } finally {
+    await browser.close(); app.close();
+    if (app.state.ui) await once(app.state.ui, 'exit');
+    app.store.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

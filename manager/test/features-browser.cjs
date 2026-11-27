@@ -1,0 +1,172 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+const { once } = require('node:events');
+const { chromium, expect } = require('@playwright/test');
+const { createStudioServer } = require('../server');
+const { prepareSource } = require('../script-source');
+(async () => {
+  const root = fs.mkdtempSync('/tmp/studio-feature-browser-');
+  fs.symlinkSync(path.resolve('node_modules'), path.join(root, 'node_modules'), 'dir');
+  const target = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<html><h1>${req.url.startsWith('/production/') ? 'production' : 'staging'}</h1><label>Username<input id="username"></label></html>`);
+  });
+  target.listen(0, '127.0.0.1'); await once(target, 'listening');
+  const targetUrl = `http://127.0.0.1:${target.address().port}`;
+  const app = createStudioServer({ dataDir: path.join(root, 'data'), scriptsDir: path.join(root, 'scripts'), localScriptsDir: path.join(root, 'local'), backupDir: path.join(root, 'backups'), artifactsDir: path.join(root, 'artifacts'), uiPort: 19324 });
+  app.server.listen(19080, '127.0.0.1'); await once(app.server, 'listening'); app.startUi();
+  const base = 'http://127.0.0.1:19080';
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const page = await browser.newPage({ viewport: { width: 1720, height: 1040 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const output = path.resolve('output'); fs.mkdirSync(output, { recursive: true });
+  const executionLog = path.join(root, 'execution.log');
+  try {
+    await page.goto(base);
+    await page.locator('#first-name').fill('Dataset Demo');
+    await page.locator('#first-url').fill(targetUrl + '/staging/');
+    await page.locator('#first-project-form').getByRole('button', { name: 'Tạo project', exact: true }).click();
+    await expect(page.locator('#project-name')).toHaveText('Dataset Demo');
+    const project = app.store.projects()[0];
+    const destination = app.store.createProject({ name: 'Destination', url: targetUrl });
+    const marker = (file, edge) => `fs.appendFileSync(${JSON.stringify(executionLog)}, data('EXPECTED_ENV') + ':${file}:${edge}\\n');`;
+    const sourceOne = `import { test, expect } from '@playwright/test';\nimport fs from 'node:fs';\ntest('dataset login', async ({ page }) => {\n ${marker('one','START')}\n await page.goto(webUrl('login'));\n await page.fill('#username', '{{USERNAME}}');\n await expect(page.locator('#username')).toHaveValue(data('USERNAME'));\n await expect(page.locator('h1')).toHaveText(data('EXPECTED_ENV'));\n await new Promise(r => setTimeout(r, 150));\n ${marker('one','END')}\n});\n`;
+    const sourceTwo = `import { test, expect } from '@playwright/test';\nimport fs from 'node:fs';\ntest('dataset second', async () => {\n ${marker('two','START')}\n expect(data('USERNAME')).toBe(data('EXPECTED_ENV') === 'staging' ? 'stage-user' : 'prod-user');\n await new Promise(r => setTimeout(r, 150));\n ${marker('two','END')}\n});\n`;
+    const one = app.store.saveScript(app.store.target(project.id, '01-login.ts'), 'Dataset login', targetUrl + '/staging/login', "import { test, expect } from '@playwright/test'; test('seed', async () => { expect(true).toBe(true); });");
+    const twoTarget = app.store.target(project.id, '02-check.ts');
+    app.store.saveScript(twoTarget, 'Dataset second', '', prepareSource(sourceTwo, { filename: twoTarget.file, runtimeFile: path.resolve('manager/runtime/dataset.ts') }));
+    app.store.saveScript(app.store.target(project.id, '03-excluded.ts'), 'Excluded script', '', "import { test, expect } from '@playwright/test'; test('excluded', async () => { expect(true).toBe(true); });");
+    app.store.backup(); await expect(page.locator('#script-count')).toHaveText('3');
+    // Create staging manually.
+    await page.locator('#manage-environments').click();
+    await page.locator('#environment-name').fill('staging');
+    for (const [key, value] of [['USERNAME','stage-user'],['EXPECTED_ENV','staging']]) {
+      await page.locator('#add-variable').click();
+      const row = page.locator('#dataset-rows tr').last(); await row.locator('.variable-key').fill(key); await row.locator('.variable-value').fill(value);
+    }
+    await page.locator('#environment-form').getByRole('button', { name: 'Lưu dataset', exact: true }).click();
+    await expect(page.locator('#environment-dialog')).not.toBeVisible();
+    const staging = app.store.environments(project.id).find(e => e.name === 'staging');
+    assert.ok(staging); await expect(page.locator('#run-environment')).toHaveValue(staging.id);
+    // Import production, with secrets hidden in the editable table.
+    await page.locator('#manage-environments').click(); await page.locator('#new-environment').click();
+    await page.locator('#env-import').setInputFiles({ name: 'production.env', mimeType: 'text/plain', buffer: Buffer.from(`BASE_URL=${targetUrl}/production/\nUSERNAME=prod-user\nEXPECTED_ENV=production\nPASSWORD="qa-only-$VALUE"\n`) });
+    await expect(page.locator('#environment-name')).toHaveValue('production');
+    await expect(page.locator('#dataset-rows .variable-key')).toHaveCount(4);
+    await page.screenshot({ path: path.join(output, 'manager-dataset-editor.png'), fullPage: true });
+    await page.locator('#environment-form').getByRole('button', { name: 'Lưu dataset', exact: true }).click();
+    await expect(page.locator('#environment-dialog')).not.toBeVisible();
+    const production = app.store.environments(project.id).find(e => e.name === 'production');
+    assert.ok(production); assert.equal(app.store.environment(production.id, project.id).variables.PASSWORD, 'qa-only-$VALUE');
+    await page.locator('#run-environment').selectOption(staging.id);
+    // Edit script with placeholders through the real source editor.
+    await page.locator('#scripts').getByRole('button', { name: 'Dataset login', exact: true }).click();
+    await page.locator('#edit-source').click(); await page.locator('#source-editor').fill(sourceOne);
+    await page.locator('#save-source').click();
+    await expect(page.locator('#source-editor')).not.toBeVisible();
+    await expect(page.locator('#source-code')).toContainText('data("USERNAME")');
+    await page.getByRole('button', { name: 'Đóng nội dung', exact: true }).click();
+    await page.locator('#search').fill('01-login');
+    await page.locator('#select-all').check(); await expect(page.locator('#selection-count')).toHaveText('Đã chọn 3 / 3 script');
+    await page.locator('#search').fill(''); await page.locator('#clear-selection').click();
+    await page.getByRole('checkbox', { name: 'Chọn 01-login.ts', exact: true }).check();
+    await page.getByRole('checkbox', { name: 'Chọn 02-check.ts', exact: true }).check();
+    await expect(page.locator('#selection-count')).toHaveText('Đã chọn 2 / 3 script');
+    await page.screenshot({ path: path.join(output, 'manager-batch-datasets.png'), fullPage: true });
+    async function runSelected(count) {
+      const [ui] = await Promise.all([page.waitForEvent('popup'), page.locator('#run-selected').click()]);
+      ui.on('pageerror', error => errors.push(error.message));
+      await ui.waitForURL(/\/playwright\/.+\/trace\/uiMode\.html/);
+      await expect(ui.locator('[data-testid="status-line"]')).toContainText(`${count} passed`, { timeout: 35000 });
+      assert.equal(page.url(), base + '/'); assert.ok(!ui.url().includes('stage-user') && !ui.url().includes('prod-user'));
+      return ui;
+    }
+    const stageUi = await runSelected(2);
+    await expect(stageUi.locator('[data-testid="test-tree"]')).not.toContainText('03-excluded.ts');
+    assert.equal(new URL(stageUi.url()).searchParams.get('project'), 'Dataset Demo / staging');
+    await stageUi.screenshot({ path: path.join(output, 'playwright-batch.png'), fullPage: true });
+    await page.locator('#run-environment').selectOption(production.id);
+    const prodUi = await runSelected(2);
+    assert.equal(new URL(prodUi.url()).searchParams.get('project'), 'Dataset Demo / production');
+    const lines = fs.readFileSync(executionLog, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 8);
+    for (let i=0; i<lines.length; i+=2) assert.equal(lines[i].replace(':START', ''), lines[i+1].replace(':END', ''), 'Each script finishes before the next starts');
+    assert.ok(lines.slice(0,4).every(line => line.startsWith('staging:')));
+    assert.ok(lines.slice(4).every(line => line.startsWith('production:')));
+    await stageUi.close(); await prodUi.close();
+    await page.locator('#run-environment').selectOption(staging.id); await page.locator('#select-all').check();
+    const allUi = await runSelected(3); await expect(allUi.locator('[data-testid="test-tree"]')).toContainText('03-excluded.ts'); await allUi.close();
+    // A user intentionally replacing a binding with a literal keeps that literal on save.
+    const beforeManual = fs.readFileSync(app.store.scriptPath(one), 'utf8');
+    const manualSource = beforeManual.replace('data("USERNAME")', '"manual-user-override"');
+    await page.locator('#scripts').getByRole('button', { name: 'Dataset login', exact: true }).click();
+    await page.locator('#edit-source').click(); await page.locator('#source-editor').fill(manualSource);
+    await page.locator('#save-source').click();
+    await expect(page.locator('#source-code')).toContainText('"manual-user-override"');
+    assert.equal(fs.readFileSync(app.store.scriptPath(one), 'utf8'), manualSource);
+    assert.equal(app.store.environment(staging.id, project.id).variables.USERNAME, 'stage-user');
+    await page.getByRole('button', { name: 'Đóng nội dung', exact: true }).click();
+    // Clone includes independent datasets and every script.
+    await page.locator('#clone-project').click(); await page.locator('#clone-name').fill('Clone Dataset Demo');
+    await page.locator('#clone-form').getByRole('button', { name: 'Clone project', exact: true }).click();
+    await expect(page.locator('#project-name')).toHaveText('Clone Dataset Demo');
+    await expect(page.locator('#script-count')).toHaveText('3');
+    const cloned = app.store.projects().find(p => p.name === 'Clone Dataset Demo');
+    assert.equal(app.store.environments(cloned.id).length, 2);
+    assert.notEqual(app.store.environments(cloned.id)[0].id, staging.id);
+    // Copy a single row, then all rows with a collision; cancel does not partially copy.
+    const cloneRow = page.locator('#scripts tr').filter({ hasText: '01-login.ts' });
+    await cloneRow.locator('summary').click(); await cloneRow.getByRole('button', { name: 'Copy sang project', exact: true }).click();
+    await page.locator('#copy-target').selectOption(destination.id); await page.locator('#copy-submit').click();
+    await expect(page.locator('#copy-dialog')).not.toBeVisible(); assert.equal(app.store.scripts(destination.id).length, 1);
+    await page.locator('#select-all').check(); await page.locator('#copy-selected').click();
+    await page.locator('#copy-target').selectOption(destination.id); await page.locator('#copy-submit').click();
+    await expect(page.locator('#confirm-dialog')).toBeVisible(); await page.locator('#confirm-cancel').click();
+    assert.equal(app.store.scripts(destination.id).length, 1);
+    await page.locator('#copy-submit').click(); await page.locator('#confirm-accept').click();
+    await expect(page.locator('#copy-dialog')).not.toBeVisible(); assert.equal(app.store.scripts(destination.id).length, 3);
+    assert.equal(app.store.environments(destination.id).length, 0);
+    assert.equal(fs.readFileSync(path.join(root, 'local/Destination/01-login.ts'), 'utf8'), fs.readFileSync(app.store.scriptPath(app.store.scripts(destination.id).find(s=>s.filename==='01-login.ts')), 'utf8'));
+    const clonedStage = app.store.environments(cloned.id).find(e => e.name === 'staging');
+    const originalSources = app.store.scripts(cloned.id).map(s => [s.id, fs.readFileSync(app.store.scriptPath(s), 'utf8')]);
+    await page.locator('#rename-project').click();
+    await expect(page.locator('#rename-name')).toHaveValue('Clone Dataset Demo');
+    await page.locator('#rename-name').fill('Destination');
+    await page.locator('#rename-form').getByRole('button', { name: 'Lưu tên mới', exact: true }).click();
+    await expect(page.locator('#rename-form .form-error')).toContainText('trùng');
+    await expect(page.locator('#project-name')).toHaveText('Clone Dataset Demo');
+    await page.locator('#rename-dialog').getByRole('button', { name: 'Hủy', exact: true }).click();
+    await page.locator('#rename-project').click();
+    await page.locator('#rename-name').fill('Renamed QA');
+    await page.locator('#rename-form').getByRole('button', { name: 'Lưu tên mới', exact: true }).click();
+    await expect(page.locator('#rename-dialog')).not.toBeVisible();
+    await expect(page.locator('#project-name')).toHaveText('Renamed QA');
+    await expect(page.locator('#projects [aria-current="page"]')).toHaveText('Renamed QA');
+    await expect(page.locator('#breadcrumb')).toContainText('Renamed QA');
+    assert.equal(app.store.project(cloned.id).name, 'Renamed QA');
+    assert.ok(!fs.existsSync(path.join(root, 'local/Clone Dataset Demo')));
+    for (const [id, source] of originalSources) assert.equal(fs.readFileSync(app.store.scriptPath(app.store.script(id)), 'utf8'), source);
+    assert.equal(fs.readFileSync(path.join(root, 'local/Renamed QA/01-login.ts'), 'utf8'), originalSources.find(([id]) => app.store.script(id).filename === '01-login.ts')[1]);
+    await page.locator('#clear-selection').click();
+    await page.getByRole('checkbox', { name: 'Chọn 02-check.ts', exact: true }).check();
+    await page.locator('#run-environment').selectOption(clonedStage.id);
+    const renamedUi = await runSelected(1);
+    assert.equal(new URL(renamedUi.url()).searchParams.get('project'), 'Renamed QA / staging');
+    await renamedUi.close();
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Rename controls fit the mobile layout');
+    assert.deepEqual(errors, []);
+    console.log('FEATURE BROWSER QA PASSED: manual/imported datasets, source bindings, selected/All sequential runs in staging and production, clone, single/bulk copy with overwrite cancellation/confirmation, local backups, rename with native UI execution and mobile layout.');
+  } catch (error) {
+    console.error('FEATURE URL:', page.url());
+    console.error((await page.locator('body').innerText()).slice(0,6000));
+    await page.screenshot({ path: path.join(output, 'manager-features-failure.png'), fullPage: true }); throw error;
+  } finally {
+    await browser.close(); app.close(); if (app.state.ui) await once(app.state.ui, 'exit');
+    app.store.close(); target.close(); fs.rmSync(root, { recursive: true, force: true });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

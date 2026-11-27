@@ -1,0 +1,46 @@
+# Dependencies and local runtime data
+node_modules/
+/.studio/
+/.runtime/
+
+# User scripts, datasets, backups and exported artifacts
+/tests-scripts/*
+!/tests-scripts/.gitkeep
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+/backups/
+/playwright-studio-backups/
+/output/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Test results and generated caches
+/test-results/
+/playwright-report/
+/playwright/.cache/
+/coverage/
+/.cache/
+/dist/
+/build/
+*.log
+*.tsbuildinfo
+
+# Local editor, agent and credential settings
+/.vscode/
+/.idea/
+/.agents/
+/.codex/
+/.aws/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo

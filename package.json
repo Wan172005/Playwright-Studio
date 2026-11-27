@@ -1,0 +1,16 @@
+{
+  "name": "playwright-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local project and test script manager with versioned backups",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "start:manager": "node manager/server.js",
+    "test:manager": "node --test manager/test/*.test.js",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui --ui-host=0.0.0.0 --ui-port=9323"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}

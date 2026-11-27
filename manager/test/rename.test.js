@@ -1,0 +1,90 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { once } = require('node:events');
+const { StudioStore } = require('../store');
+const { createStudioServer } = require('../server');
+function fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-rename-'));
+  const options = { dataDir: path.join(root, 'data'), scriptsDir: path.join(root, 'scripts'), localScriptsDir: path.join(root, 'local'), backupDir: path.join(root, 'backups') };
+  const store = new StudioStore(options);
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  return { root, options, store };
+}
+test('rename preserves identities, datasets and source, moves the local folder, and keeps historical snapshots', t => {
+  const { root, store } = fixture(t);
+  const p = store.createProject({ name: 'Original', url: 'https://example.com' });
+  const script = store.saveScript(store.target(p.id, 'Đăng nhập.ts'), 'Login', '', 'original bytes');
+  const env = store.recordingEnvironment(p.id, null, p.url);
+  assert.equal(store.backup().error, '');
+  fs.writeFileSync(path.join(root, 'local/Original/retained.ts'), 'deleted file backup');
+  const previous = fs.readdirSync(path.join(root, 'backups'));
+  const renamed = store.renameProject(p.id, { name: '  Tên project mới  ', expectedName: p.name });
+  assert.equal(renamed.id, p.id); assert.equal(renamed.name, 'Tên project mới');
+  assert.equal(renamed.url, p.url); assert.equal(renamed.createdAt, p.createdAt);
+  assert.equal(store.scripts(p.id)[0].id, script.id); assert.equal(fs.readFileSync(store.scriptPath(script), 'utf8'), 'original bytes');
+  assert.deepEqual(store.environment(env.id, p.id), env);
+  assert.equal(store.get(`defaultEnvironment:${p.id}`), env.id);
+  assert.ok(!fs.existsSync(path.join(root, 'local/Original')));
+  assert.equal(fs.readFileSync(path.join(root, 'local/Tên project mới/retained.ts'), 'utf8'), 'deleted file backup');
+  assert.equal(store.backup().pending, false);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'data/projects.json'), 'utf8'))[0];
+  assert.equal(manifest.name, renamed.name); assert.equal(manifest.defaultEnvironmentId, env.id);
+  for (const dir of previous) assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'backups', dir, 'manifest.json'), 'utf8')).projects[0].name, p.name);
+  const current = JSON.parse(fs.readFileSync(path.join(root, 'backups', fs.readdirSync(path.join(root, 'backups')).find(dir => !previous.includes(dir)), 'manifest.json'), 'utf8'));
+  assert.equal(current.projects[0].name, renamed.name); assert.equal(current.projects[0].localFolder, renamed.name);
+});
+test('rename validates stale names and native project collisions, protects unrelated folders, and rolls back I/O failure', t => {
+  const { root, store } = fixture(t);
+  const a = store.createProject({ name: 'A' }), b = store.createProject({ name: 'B' });
+  store.saveEnvironment(a.id, { name: 'stage', variables: {} });
+  store.saveEnvironment(b.id, { name: 'prod', variables: {} });
+  store.createProject({ name: 'Taken / stage' });
+  store.backup();
+  for (const name of ['', '*', 'bad\nname', 'b', 'B / prod', 'Taken']) {
+    assert.throws(() => store.renameProject(a.id, { name, expectedName: 'A' }), e => [400,409].includes(e.status));
+  }
+  assert.throws(() => store.renameProject(a.id, { name: 'New', expectedName: 'stale' }), e => e.status === 409);
+  assert.equal(store.renameProject(a.id, { name: 'A', expectedName: 'A' }).name, 'A');
+  fs.mkdirSync(path.join(root, 'local/Reserved'));
+  fs.writeFileSync(path.join(root, 'local/Reserved/keep.ts'), 'unrelated');
+  const renamed = store.renameProject(a.id, { name: 'Reserved', expectedName: 'A' });
+  const folder = store.get(`localFolder:${a.id}`);
+  assert.notEqual(folder, 'Reserved'); assert.ok(folder.startsWith('Reserved-'));
+  assert.equal(fs.readFileSync(path.join(root, 'local/Reserved/keep.ts'), 'utf8'), 'unrelated');
+  const write = store.writeManifest.bind(store); let calls = 0;
+  store.writeManifest = () => { if (++calls === 1) throw new Error('manifest failure'); return write(); };
+  assert.throws(() => store.renameProject(a.id, { name: 'Another', expectedName: renamed.name }), /manifest failure/);
+  assert.equal(store.project(a.id).name, 'Reserved'); assert.equal(store.get(`localFolder:${a.id}`), folder);
+  assert.ok(fs.existsSync(path.join(root, 'local', folder))); assert.ok(!fs.existsSync(path.join(root, 'local/Another')));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'data/projects.json'), 'utf8')).find(p => p.id === a.id).name, 'Reserved');
+});
+test('HTTP rename updates UI URLs and retains data, rejects active recordings and failed backups', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-rename-api-'));
+  const app = createStudioServer({ dataDir: path.join(root, 'data'), scriptsDir: path.join(root, 'scripts'), localScriptsDir: path.join(root, 'local'), backupDir: path.join(root, 'backups') });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  t.after(() => { app.close(); app.store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${app.server.address().port}`;
+  async function post(url, body) { const r = await fetch(base + '/api' + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; }
+  const p = app.store.createProject({ name: 'Before' });
+  const script = app.store.saveScript(app.store.target(p.id, 'Login.ts'), 'Login', '', 'test source');
+  const env = app.store.saveEnvironment(p.id, { name: 'staging', variables: { USERNAME: 'original' } });
+  assert.equal((await post(`/projects/${p.id}/rename`, { name: 'After' })).status, 400);
+  app.state.session = {};
+  assert.equal((await post(`/projects/${p.id}/rename`, { name: 'After', expectedName: 'Before' })).status, 409);
+  app.state.session = null;
+  const backupDir = app.store.backupDir;
+  fs.writeFileSync(path.join(root, 'blocked'), 'file'); app.store.backupDir = path.join(root, 'blocked');
+  assert.equal((await post(`/projects/${p.id}/rename`, { name: 'After', expectedName: 'Before' })).status, 409);
+  assert.equal(app.store.project(p.id).name, 'Before'); app.store.backupDir = backupDir;
+  const renamed = await post(`/projects/${p.id}/rename`, { name: 'After', expectedName: 'Before' });
+  assert.equal(renamed.status, 200); assert.equal(renamed.body.project.id, p.id); assert.equal(renamed.body.backup.pending, false);
+  assert.equal((await post(`/projects/${p.id}/rename`, { name: 'Lost update', expectedName: 'Before' })).status, 409);
+  const opened = await post(`/scripts/${script.id}/open-ui`, { environmentId: env.id });
+  assert.equal(new URL(opened.body.url, base).searchParams.get('project'), 'After / staging');
+  assert.equal(app.store.environment(env.id, p.id).variables.USERNAME, 'original');
+  assert.equal(fs.readFileSync(path.join(root, 'local/After/Login.ts'), 'utf8'), 'test source');
+});
