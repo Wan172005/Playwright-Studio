@@ -12,7 +12,21 @@ Script kiểm tra Docker, Compose và Buildx, tự cài thành phần còn thi�
 
 Nếu dùng Docker Desktop trên Windows, mở Docker Desktop và bật **Settings → Resources → WSL Integration** cho distro hiện tại trước khi chạy script.
 
-Chờ container khởi tạo rồi mở **[Web Manager](http://localhost:8081)**.
+Sau khi `start.sh` chạy xong, kiểm tra container bằng lệnh:
+
+```bash
+sudo docker ps
+```
+
+Trong kết quả, tìm container `playwright-recorder-studio`. Cột **STATUS** phải bắt đầu bằng **Up**.
+
+![Kết quả sudo docker ps với trạng thái Up được khoanh đỏ](docs/images/docker-ps-up.png)
+
+Khi container đã chạy, mở trình duyệt và truy cập Playwright Studio.
+
+```text
+http://localhost:8081
+```
 
 ## Nạp code mới sau khi pull
 
