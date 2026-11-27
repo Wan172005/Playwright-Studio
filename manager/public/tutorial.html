@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hướng dẫn sử dụng · Playwright Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/tutorial.css">
+</head>
+<body class="tutorial-page">
+  <div class="app-shell">
+    <aside class="sidebar tutorial-sidebar">
+      <a class="brand" href="/"><span class="brand-mark">P</span><span>Playwright Studio</span></a>
+      <nav aria-label="Studio">
+        <a class="button text-button" href="/">Projects</a>
+        <a class="button tutorial-current" href="/tutorial.html" aria-current="page">Hướng dẫn sử dụng</a>
+      </nav>
+    </aside>
+    <div class="tutorial-layout">
+      <header class="tutorial-heading">
+        <h1>Hướng dẫn sử dụng</h1>
+        <p>Tạo project Giỏ hàng, ghi một bài test và chạy lại với dữ liệu của từng môi trường.</p>
+      </header>
+      <nav class="tutorial-toc" aria-label="Trong trang này">
+        <strong>Trong trang này</strong>
+        <a href="#project">Tạo project đầu tiên</a>
+        <a href="#dataset">Dataset môi trường</a>
+        <a href="#record">Ghi và sửa test script</a>
+        <a href="#source">Chỉnh TypeScript và gắn biến</a>
+        <a href="#run">Chạy và xem kết quả</a>
+        <a href="#manage">Quản lý và sao lưu</a>
+      </nav>
+      <main class="tutorial-content">
+        <section id="project">
+          <h2>Tạo project đầu tiên</h2>
+          <ol>
+            <li>Ở màn hình trống, nhập <strong>Tên project</strong>, ví dụ <code>Giỏ hàng</code>.</li>
+            <li>Điền <strong>Website URL mặc định</strong> nếu đã có địa chỉ web. Studio dùng địa chỉ này để gợi ý URL khi tạo script.</li>
+            <li>Bấm <strong>Tạo project</strong>. Sau đó chọn project ở sidebar. Dùng nút <strong>+</strong> hoặc <strong>Tạo project</strong> để tạo thêm.</li>
+          </ol>
+          <figure><img src="/tutorial-images/first-project.png" alt="Màn hình trống và ba bước điền tên, URL, tạo project"><figcaption>Form xuất hiện khi Studio chưa có project.</figcaption></figure>
+        </section>
+        <section id="dataset">
+          <h2>Dataset môi trường</h2>
+          <ol>
+            <li>Trong project, mở <strong>Dataset / .env</strong>, bấm <strong>Thêm môi trường</strong> và đặt tên <code>staging</code>.</li>
+            <li>Thêm <code>BASE_URL</code> là URL HTTP/HTTPS đầy đủ, rồi dùng <strong>Thêm biến</strong> để thêm <code>QUANTITY</code> và <code>EXPECTED_TOTAL</code>. Có thể dùng <strong>Import .env</strong> để thay bảng biến đang soạn bằng nội dung file.</li>
+            <li>Bấm <strong>Lưu dataset</strong>. Studio chọn môi trường vừa lưu. Lặp lại cho <code>production</code> với cùng tên biến và giá trị phù hợp, rồi dùng menu <strong>Môi trường chạy</strong> để đổi dataset trước khi ghi hoặc chạy test.</li>
+          </ol>
+          <figure><img src="/tutorial-images/dataset.png" alt="Hộp thoại dataset staging với nút thêm môi trường, nhập env và lưu"><figcaption>Chọn dataset có sẵn ở đầu hộp thoại để sửa. <strong>Hiện giá trị</strong> bật hoặc tắt che giá trị, nút <strong>Xóa biến</strong> bỏ dòng khỏi bảng, <strong>Tải .env</strong> xuất dataset đã lưu, và <strong>Xóa môi trường</strong> bỏ dataset được chọn. Bấm dấu × để đóng.</figcaption></figure>
+          <p><strong>Mặc định</strong> dùng dataset mặc định của project khi đã có. Studio tạo hoặc dùng lại dataset <code>default</code> trong lần đầu ghi với lựa chọn này. Bạn có thể mở dataset đó để sửa giá trị.</p>
+        </section>
+        <section id="record">
+          <h2>Ghi và sửa test script</h2>
+          <ol>
+            <li>Bấm <strong>Tạo test script</strong>, nhập tên và <strong>Website URL</strong>, kiểm tra môi trường rồi chọn <strong>Bắt đầu ghi thao tác</strong>. <strong>Hủy</strong> hoặc dấu × đóng form.</li>
+            <li>Trong <strong>Browser Desktop</strong>, mở giỏ hàng và đổi số lượng. Trong Playwright Inspector, chọn assertion văn bản rồi bấm vào tổng tiền. Bạn cũng có thể kiểm tra phần tử hiển thị hoặc giá trị trong ô nhập. Nếu cần quay lại tab ghi, bấm <strong>Browser Desktop</strong> trong thanh phiên ở Manager.</li>
+            <li>Bấm <strong>Tạm dừng để sửa</strong> và chỉnh hoặc xóa dòng TypeScript bị sai. Nếu thao tác sai làm web chuyển trang, đưa web về đúng trạng thái trong lúc tạm dừng.</li>
+            <li>Bấm <strong>Áp dụng và ghi tiếp</strong>. Inspector cập nhật bản TypeScript, trình sửa ẩn và các thao tác mới được nối vào sau phần đã sửa.</li>
+            <li><strong>Lưu test script</strong> lưu bản cuối và đóng tab. <strong>Hủy test script</strong> hỏi xác nhận rồi bỏ bản nháp và đóng tab. Khi ghi thay bản cũ, bản đã lưu được giữ nếu bạn hủy phiên.</li>
+          </ol>
+          <figure><img src="/tutorial-images/record-start.png" loading="lazy" alt="Form ghi test giỏ hàng với lựa chọn môi trường và nút bắt đầu"><figcaption>Xem lại tên file, URL và môi trường trước khi bắt đầu.</figcaption></figure>
+          <figure><img src="/tutorial-images/record-paused.png" loading="lazy" alt="Browser Desktop tạm dừng với editor TypeScript và nút ghi tiếp, lưu, hủy"><figcaption>Trình sửa bên phải chỉ hiện trong lúc tạm dừng. Manager cũng có nút <strong>Dừng và lưu test script</strong> khi đang ghi.</figcaption></figure>
+        </section>
+        <section id="source">
+          <h2>Chỉnh TypeScript và gắn biến</h2>
+          <ol>
+            <li>Bấm tên script hoặc chọn <strong>Xem nội dung</strong> trong menu <strong>···</strong>. Chọn <strong>Chỉnh sửa</strong> để mở editor.</li>
+            <li>Bôi đen giá trị cần thay, chọn biến <code>QUANTITY</code> rồi bấm <strong>Gắn biến</strong>. Studio dùng dữ liệu môi trường lúc chạy, ví dụ <code>data("QUANTITY")</code>.</li>
+            <li>Dùng <strong>Chuyển URL website sang BASE_URL</strong> để chuyển URL cùng website sang địa chỉ của môi trường chạy. Bấm <strong>Lưu script</strong> hoặc <strong>Hủy sửa</strong>. Dùng <strong>Tải file .ts</strong> để tải bản script.</li>
+          </ol>
+          <figure><img src="/tutorial-images/source.png" loading="lazy" alt="Editor script có công cụ gắn biến, chuyển URL và lưu"><figcaption>Script được ghi có thể sinh thêm biến dataset tự động. Khi sửa thủ công, các giá trị cố định được giữ nguyên cho đến khi bạn gắn biến.</figcaption></figure>
+        </section>
+        <section id="run">
+          <h2>Chạy và xem kết quả</h2>
+          <ol>
+            <li>Chọn <strong>Môi trường chạy</strong>. Bấm <strong>Chạy trong UI</strong> ở một hàng, hoặc tick một số hàng rồi chọn <strong>Chạy nhóm trong UI</strong>. <strong>All (toàn project)</strong> chọn toàn bộ script. <strong>Bỏ chọn</strong> xóa lựa chọn.</li>
+            <li>Playwright UI mở tab riêng, chọn đúng file và môi trường rồi chạy test. Bấm test để xem từng bước. Với lỗi assertion, mở bước lỗi rồi chọn tab <strong>Errors</strong> để xem giá trị <strong>Expected</strong> và <strong>Received</strong>, cùng ảnh chụp trạng thái trang ở bước đó nếu có.</li>
+            <li>Sửa script hoặc dataset, rồi chạy lại. Để đổi môi trường, quay về Manager, chọn môi trường khác và mở lại Playwright UI.</li>
+          </ol>
+          <figure><img src="/tutorial-images/run.png" loading="lazy" alt="Danh sách test có lựa chọn môi trường, chạy từng script và chạy nhóm"><figcaption>Chọn <code>staging</code> trước khi chạy một script hoặc cả nhóm.</figcaption></figure>
+          <figure><img src="/tutorial-images/result.png" loading="lazy" alt="Kết quả Playwright UI cho assertion tổng tiền thất bại với Expected và Received"><figcaption>Đối chiếu tổng tiền kỳ vọng với số tiền thực tế trong phần lỗi của bài test.</figcaption></figure>
+        </section>
+        <section id="manage">
+          <h2>Quản lý và sao lưu</h2>
+          <ul>
+            <li><strong>Tìm test script</strong> lọc danh sách. Menu sắp xếp có <strong>Mới cập nhật</strong> và <strong>Tên A–Z</strong>.</li>
+            <li>Trong menu <strong>···</strong>, dùng <strong>Copy sang project</strong>, <strong>Ghi lại script</strong> hoặc <strong>Xóa test script</strong>. Bạn cũng có thể copy nhiều script bằng thanh chọn nhóm. Bản copy dùng dataset của project đích. Khi trùng file, Studio yêu cầu xác nhận ghi đè.</li>
+            <li>Trên thanh project, dùng <strong>Đổi tên project</strong>, <strong>Clone project</strong> hoặc biểu tượng <strong>Xóa project</strong>. Khi clone, chọn có sao chép dataset hay không. Sau khi đổi tên, mở lại tab Playwright UI từ Manager.</li>
+            <li>Mở <strong>Cài đặt sao lưu</strong> để xem trạng thái, thời điểm hoặc lỗi sao lưu. Bấm <strong>Sao lưu ngay</strong> để thử lại. Bản sao local nằm trong <code>tests-scripts/&lt;tên-project&gt;/</code>.</li>
+          </ul>
+          <figure><img src="/tutorial-images/manage.png" loading="lazy" alt="Menu thao tác script và các nút quản lý project"><figcaption>Menu ··· áp dụng cho một script. Thanh chọn nhóm áp dụng cho các hàng đã tick.</figcaption></figure>
+          <figure><img src="/tutorial-images/backup.png" loading="lazy" alt="Hộp thoại cài đặt sao lưu với trạng thái và nút Sao lưu ngay"></figure>
+          <p><a class="button primary" href="/">Về Projects</a></p>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

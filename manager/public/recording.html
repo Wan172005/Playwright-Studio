@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Desktop · Playwright Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/recording.css">
+  <script src="/recording.js" defer></script>
+</head>
+<body class="recording-page">
+  <header class="recording-toolbar">
+    <strong>Playwright Studio</strong>
+    <span id="recording-status" role="status">Đang kết nối…</span>
+    <div class="recording-buttons">
+      <button id="pause-recording" disabled>Tạm dừng để sửa</button>
+      <button id="resume-recording" hidden>Áp dụng và ghi tiếp</button>
+      <button id="save-recording" class="save-recording" disabled>Lưu test script</button>
+      <button id="cancel-recording" class="cancel-recording" disabled>Hủy test script</button>
+    </div>
+  </header>
+  <div class="recording-feedback">
+    <p id="recording-error" class="form-error" role="alert"></p>
+    <a id="back-to-manager" href="/" hidden>Về Playwright Studio</a>
+  </div>
+  <main class="recording-workspace" id="recording-workspace">
+    <iframe id="recording-desktop" title="Browser Desktop (noVNC)"></iframe>
+    <section class="recording-editor" id="recording-editor" hidden>
+      <label for="recording-source" id="recording-filename">Bản nháp TypeScript</label>
+      <textarea id="recording-source" spellcheck="false" autocapitalize="off" autocomplete="off" readonly aria-describedby="recording-help"></textarea>
+      <p id="recording-help">Tạm dừng để sửa bản nháp.</p>
+    </section>
+  </main>
+</body>
+</html>

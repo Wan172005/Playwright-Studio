@@ -40,6 +40,7 @@ function parameterizeRecording(source, options, existing = {}) {
   traverse(ast, {
     CallExpression(p) {
       const call = p.node;
+      if (options.generatedCalls && !options.generatedCalls.has(source.slice(call.start, call.end))) return;
       if (call.callee.type !== 'MemberExpression' || call.callee.computed) return;
       const method = call.callee.property.name, args = call.arguments;
       const field = fieldName(call.callee.object);
@@ -75,4 +76,13 @@ function parameterizeRecording(source, options, existing = {}) {
   for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.text + source.slice(edit.end);
   return { source: prepareSource(source, options), variables };
 }
-module.exports = { parameterizeRecording };
+function generatedCallTexts(source, filename) {
+  const { babelParse, traverse } = require('playwright/lib/transform/babelBundle');
+  const calls = new Set();
+  traverse(babelParse(source, filename, true), {
+    CallExpression({ node }) { calls.add(source.slice(node.start, node.end)); },
+  });
+  return calls;
+}
+
+module.exports = { parameterizeRecording, generatedCallTexts };

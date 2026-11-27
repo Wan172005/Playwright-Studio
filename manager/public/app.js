@@ -12,6 +12,7 @@ let lastMessage = '';
 const selectedScripts = new Set();
 let selectedEnvironmentId = localStorage.getItem(`studio.environment.${selectedId}`) || '';
 let currentSource = null;
+let recordingTab = null;
 let copyIds = [];
 let editingEnvironment = null;
 let renamingProject = null;
@@ -118,10 +119,10 @@ function render() {
   document.querySelectorAll('[data-action="new-project"]').forEach(button => { button.disabled = Boolean(snapshot.session); });
   $('session-banner').hidden = !snapshot.session;
   if (snapshot.session) {
-    $('session-title').textContent = `${snapshot.session.stopping ? 'Đang dừng và lưu' : 'Đang ghi thao tác'}: ${snapshot.session.filename}`;
+    $('session-title').textContent = `${snapshot.session.stopping ? 'Đang kết thúc' : snapshot.session.phase === 'paused' ? 'Đã tạm dừng' : 'Đang ghi thao tác'}: ${snapshot.session.filename}`;
     $('session-project').textContent = snapshot.projects.find(p => p.id === snapshot.session.projectId)?.name || '';
     $('desktop-link').href = snapshot.desktopUrl;
-    $('stop-script').disabled = snapshot.session.stopping;
+    $('stop-script').disabled = snapshot.session.stopping || ['starting', 'paused'].includes(snapshot.session.phase);
   }
   const backup = snapshot.backup;
   const hasProjects = snapshot.projects.length > 0;
@@ -154,7 +155,8 @@ function openScript(script) {
   $('script-project').value = project().name;
   $('script-environment').value = (snapshot.environments || []).find(e => e.id === drawerEnvironmentId)?.name || 'Mặc định (dataset default)';
   $('script-name').value = script?.filename || '';
-  $('script-url').value = script?.url || (snapshot.environments || []).find(e => e.id === selectedEnvironmentId)?.baseURL || project().url || '';
+  const recordingEnvironment = (snapshot.environments || []).find(e => e.id === (drawerEnvironmentId || snapshot.defaultEnvironmentId));
+  $('script-url').value = script?.url || recordingEnvironment?.baseURL || project().url || '';
   $('script-drawer').hidden = false; filenamePreview(); $('script-name').focus();
 }
 function filenamePreview() {
@@ -185,25 +187,38 @@ $('script-form').addEventListener('submit', async event => {
   event.preventDefault(); const form = event.currentTarget, button = $('start-script');
   const payload = { ...Object.fromEntries(new FormData(form)), projectId: drawerProjectId, environmentId: drawerEnvironmentId };
   button.disabled = true; form.querySelector('.form-error').textContent = '';
+  const openDesktopTab = () => {
+    const tab = window.open('about:blank', '_blank');
+    if (tab) tab.opener = null;
+    return tab;
+  };
+  let pendingTab = openDesktopTab();
   try {
     let result;
     try { result = await api('/scripts/start', 'POST', payload); }
     catch (error) {
       if (error.code !== 'OVERWRITE_REQUIRED') throw error;
+      pendingTab?.close();
+      pendingTab = null;
       const accepted = await confirmAction('Ghi đè test script?', `${error.error}\nBản cũ sẽ được sao lưu trước khi thay thế.`, 'Ghi đè file');
       if (!accepted) return;
+      pendingTab = openDesktopTab();
       payload.overwriteHash = error.overwriteHash;
       result = await api('/scripts/start', 'POST', payload);
     }
     closeDrawers(); snapshot = result; render();
-    window.open(result.desktopUrl, '_blank', 'noopener');
-    toast('Đã bắt đầu ghi thao tác. Mở Browser Desktop; khi xong chọn Dừng và lưu test script.');
-  } catch (error) { form.querySelector('.form-error').textContent = error.message; }
+    recordingTab = pendingTab?.closed ? null : pendingTab;
+    recordingTab?.location.replace(result.desktopUrl);
+    toast(recordingTab ? 'Đã mở Browser Desktop.' : 'Bấm Browser Desktop để mở phiên ghi.');
+  } catch (error) {
+    pendingTab?.close();
+    form.querySelector('.form-error').textContent = error.message;
+  }
   finally { button.disabled = false; }
 });
 $('stop-script').onclick = async () => {
   $('stop-script').disabled = true;
-  try { await api('/scripts/stop', 'POST'); await refresh(); } catch (error) { toast(error.message); $('stop-script').disabled = false; }
+  try { await api('/scripts/stop', 'POST'); recordingTab?.close(); await refresh(); } catch (error) { toast(error.message); $('stop-script').disabled = false; }
 };
 $('search').oninput = renderScripts; $('sort').onchange = renderScripts;
 $('scripts').addEventListener('click', async event => {
@@ -277,8 +292,11 @@ $('run-selected').onclick = async () => {
   finally { renderSelection(); }
 };
 function renderEnvironments() {
-  const environments = snapshot.environments || [];
-  if (selectedEnvironmentId && !environments.some(e => e.id === selectedEnvironmentId)) selectedEnvironmentId = '';
+  const environments = (snapshot.environments || []).filter(e => e.id !== snapshot.defaultEnvironmentId);
+  if (selectedEnvironmentId && !environments.some(e => e.id === selectedEnvironmentId)) {
+    selectedEnvironmentId = '';
+    localStorage.setItem(`studio.environment.${selectedId}`, '');
+  }
   setHtml($('run-environment'), '<option value="">Mặc định</option>' + environments.map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join(''));
   $('run-environment').value = selectedEnvironmentId;
   $('manage-environments').disabled = Boolean(snapshot.session);

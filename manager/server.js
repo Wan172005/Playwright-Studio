@@ -7,7 +7,8 @@ const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { StudioStore, ApiError, scriptFilename, hash } = require('./store');
 const { prepareSource } = require('./script-source');
-const { parameterizeRecording } = require('./recording-data');
+const { parameterizeRecording, generatedCallTexts } = require('./recording-data');
+const { testBody, appendSteps } = require('./recording-draft');
 const { runtimeProjectName } = require('./project-runtime');
 const { parseEnv } = require('node:util');
 
@@ -64,9 +65,9 @@ function createStudioServer(options = {}) {
     if (store.reconcile() && !state.session) store.backup();
     return { projects: store.projects(), scripts: projectId ? store.scripts(projectId) : [], environments: projectId ? store.environments(projectId) : [], defaultEnvironmentId: projectId ? store.get(`defaultEnvironment:${projectId}`) : '',
       session: state.session && { id: state.session.id, projectId: state.session.target.projectId, name: state.session.name,
-        filename: state.session.target.filename, stopping: state.session.stopping },
+        filename: state.session.target.filename, stopping: state.session.stopping, phase: state.session.phase },
       message: state.message, backup: store.backupStatus(), logs: state.logs,
-      desktopUrl: `http://localhost:${process.env.NOVNC_PUBLIC_PORT || '6080'}/vnc.html?autoconnect=true&resize=scale` };
+      desktopUrl: state.session ? `/recording.html?session=${state.session.id}` : null };
   }
   function ensureIdle() { if (state.session) throw new ApiError(409, 'Hãy dừng và lưu phiên ghi thao tác hiện tại trước.'); }
   function finalize(session, code, signal) {
@@ -81,17 +82,95 @@ function createStudioServer(options = {}) {
       let source = fs.readFileSync(session.draft, 'utf8');
       if (!/\btest\(/.test(source)) throw new Error('Bản nháp chưa chứa test Playwright hợp lệ.');
       source = source.replace(/\btest\(\s*(['"])test\1\s*,/, () => `test(${JSON.stringify(session.name)},`);
-      const environment = store.environment(session.environmentId, session.target.projectId);
-      const recorded = parameterizeRecording(source, { filename: session.target.file, runtimeFile, baseUrl: session.url }, environment.variables);
-      source = recorded.source;
-      // A completed snapshot must preserve the previous version before replacing it.
-      if (store.backup().error) throw new Error('Chưa sao lưu được dữ liệu cũ. Giữ nguyên file cũ và bản nháp; hãy kiểm tra thư mục backup.');
-      store.saveRecordedScript(session.target, session.name, session.url, source, session.environmentId, recorded.variables);
-      fs.unlinkSync(session.draft);
-      const backup = store.backup();
-      state.message = backup.pending ? `Đã lưu ${session.target.filename}; chưa sao lưu được. Hãy thử lại.` : `Đã lưu và sao lưu ${session.target.filename}.`;
+      saveRecording(session, source);
+      fs.rmSync(session.draft, { force: true });
     } catch (error) { state.message = error.message; log(error.message); }
     finally { if (state.session === session) state.session = null; }
+  }
+  function saveRecording(session, source) {
+    const environment = store.environment(session.environmentId, session.target.projectId);
+    const recorded = parameterizeRecording(source, { filename: session.target.file, runtimeFile, baseUrl: session.url,
+      generatedCalls: session.generatedCalls }, environment.variables);
+    // Back up the previous version before replacing the file.
+    if (store.backup().error) throw new Error('Chưa sao lưu được dữ liệu cũ. Bản nháp vẫn được giữ.');
+    store.saveRecordedScript(session.target, session.name, session.url, recorded.source, session.environmentId, recorded.variables);
+    const backup = store.backup();
+    state.message = backup.pending ? `Đã lưu ${session.target.filename}; chưa sao lưu được. Hãy thử lại.` : `Đã lưu và sao lưu ${session.target.filename}.`;
+  }
+  function recorderCommand(session, command, source) {
+    return new Promise((resolve, reject) => {
+      const id = randomUUID(), { child } = session;
+      if (!child.connected) return reject(new ApiError(409, 'Phiên ghi đã kết thúc.'));
+      const cleanup = () => { clearTimeout(timer); child.off('message', message); child.off('disconnect', disconnected); };
+      const fail = error => { cleanup(); reject(error); };
+      const disconnected = () => fail(new ApiError(409, 'Mất kết nối với Playwright Recorder.'));
+      const message = reply => {
+        if (reply.id !== id) return;
+        cleanup();
+        if (reply.error) reject(new Error(reply.error)); else resolve(reply.result);
+      };
+      const timer = setTimeout(() => fail(new ApiError(504, 'Playwright Recorder không phản hồi.')), 10000);
+      child.on('message', message); child.once('disconnect', disconnected);
+      child.send({ id, command, source }, error => { if (error) fail(error); });
+    });
+  }
+  function recordingSession(id) {
+    const session = state.session;
+    if (!session || session.id !== id) throw new ApiError(404, 'Phiên ghi đã kết thúc hoặc không còn tồn tại.');
+    if (!session.managed) throw new ApiError(409, 'Phiên ghi này dùng Playwright Inspector.');
+    return session;
+  }
+  function recordingView(session, source) {
+    return { filename: session.target.filename, phase: session.phase, revision: session.revision, source,
+      vncPort: process.env.NOVNC_PUBLIC_PORT || '6080' };
+  }
+  async function recordingAction(session, action, payload = {}) {
+    if (session.busy || session.stopping) throw new ApiError(409, 'Phiên ghi đang xử lý một thao tác khác.');
+    if (payload.revision !== undefined && payload.revision !== session.revision)
+      throw new ApiError(409, 'Bản nháp đã thay đổi trong tab khác. Hãy tải lại để tiếp tục.');
+    if (session.phase === 'starting' && action !== 'cancel') throw new ApiError(409, 'Playwright Recorder đang khởi động.');
+    session.busy = true;
+    try {
+      if (action === 'cancel') {
+        session.stopping = true;
+        session.completed = true;
+        state.message = `Đã hủy phiên ghi ${session.target.filename}.`;
+        session.child.kill('SIGTERM');
+        return { message: state.message };
+      }
+      if (action === 'resume') {
+        if (session.phase !== 'paused') throw new ApiError(409, 'Hãy tạm dừng trước khi sửa bản nháp.');
+        const source = payload.source;
+        testBody(source, session.target.file);
+        if (!session.generatedCalls && source !== session.pausedSource)
+          session.generatedCalls = generatedCallTexts(session.pausedSource, session.target.file);
+        fs.writeFileSync(session.editDraft, source);
+        await recorderCommand(session, 'resume', source);
+        session.phase = 'recording';
+        session.revision++;
+        return recordingView(session, source);
+      }
+      if (session.phase !== 'paused') {
+        const draft = await recorderCommand(session, 'pause');
+        session.pausedSource = draft.source;
+        if (session.generatedCalls && draft.steps)
+          for (const call of generatedCallTexts(appendSteps('test("draft", async () => {});', draft.steps, session.target.file), session.target.file))
+            session.generatedCalls.add(call);
+        session.phase = 'paused';
+        session.revision++;
+      }
+      if (action === 'pause') return recordingView(session, session.pausedSource);
+      const source = payload.source ?? session.pausedSource;
+      testBody(source, session.target.file);
+      if (!session.generatedCalls && source !== session.pausedSource)
+        session.generatedCalls = generatedCallTexts(session.pausedSource, session.target.file);
+      fs.writeFileSync(session.editDraft, source);
+      saveRecording(session, source);
+      session.stopping = true;
+      session.completed = true;
+      session.child.kill('SIGTERM');
+      return { message: state.message };
+    } finally { session.busy = false; }
   }
   function startSession(payload) {
     ensureIdle();
@@ -99,7 +178,10 @@ function createStudioServer(options = {}) {
     const filename = scriptFilename(payload.name);
     const target = store.target(payload.projectId, payload.name, payload.overwriteHash);
     const url = normalizeUrl(payload.url);
-    if (!fs.existsSync(cli)) throw new ApiError(503, 'Chưa cài Playwright. Hãy khởi động bằng Docker Compose.');
+    try {
+      if (options.cli) fs.accessSync(cli);
+      else require.resolve('playwright');
+    } catch { throw new ApiError(503, 'Chưa cài Playwright. Hãy khởi động bằng Docker Compose.'); }
     const environment = store.recordingEnvironment(payload.projectId, payload.environmentId, url);
     if (!store.project(payload.projectId).url) {
       store.db.prepare('UPDATE projects SET url=? WHERE id=?').run(new URL(url).origin, payload.projectId);
@@ -107,19 +189,46 @@ function createStudioServer(options = {}) {
     }
     const id = randomUUID();
     const draft = path.join(draftsDir, `${id}.spec.ts`);
-    const child = spawn(process.execPath, [cli, 'codegen', '--target=playwright-test', '--browser=chromium', '--output', draft, url],
-      { cwd: root, env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' }, stdio: ['ignore', 'pipe', 'pipe'] });
-    const session = { id, target, draft, child, environmentId: environment.id, name: String(payload.name).replace(/\.spec\.ts$|\.ts$/, ''), url, stopping: false };
+    const managed = !options.cli;
+    const name = String(payload.name).replace(/\.spec\.ts$|\.ts$/, '');
+    const args = managed ? [path.join(__dirname, 'recorder-worker.js'), draft, url, name]
+      : [cli, 'codegen', '--target=playwright-test', '--browser=chromium', '--output', draft, url];
+    const child = spawn(process.execPath, args, { cwd: root, env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
+      stdio: managed ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'] });
+    const session = { id, target, draft, child, managed, phase: managed ? 'starting' : 'recording', revision: 0,
+      editDraft: path.join(draftsDir, `${id}.edited.spec.ts`), environmentId: environment.id,
+      name, url, stopping: false };
     state.session = session;
     state.message = `Đang ghi thao tác cho ${filename}.`;
     output(child, 'codegen');
-    child.on('error', error => { session.cancelled = true; log(error.message); finalize(session, 1); });
-    child.on('close', (code, signal) => finalize(session, code, signal));
+    child.on('error', error => {
+      log(error.message);
+      if (!managed) { session.cancelled = true; finalize(session, 1); }
+    });
+    if (managed) {
+      child.on('message', message => { if (message.ready && !session.stopping) session.phase = 'recording'; });
+      child.on('close', () => {
+        if (session.completed) {
+          for (const file of [session.draft, session.editDraft]) {
+            try { fs.rmSync(file, { force: true }); } catch (error) { log(error.message); }
+          }
+        } else {
+          state.message = 'Phiên ghi đã dừng. Các bản nháp đã tạo vẫn còn trong thư mục drafts.';
+        }
+        if (state.session === session) state.session = null;
+      });
+    } else {
+      child.on('close', (code, signal) => finalize(session, code, signal));
+    }
     return snapshot(payload.projectId);
   }
   function stopSession() {
     const session = state.session;
     if (!session) throw new ApiError(409, 'Hiện không có phiên ghi thao tác.');
+    if (session.managed) {
+      if (session.phase === 'paused') throw new ApiError(409, 'Hãy lưu bản nháp từ tab Browser Desktop.');
+      return recordingAction(session, 'save');
+    }
     if (!session.stopping) {
       session.stopping = true;
       session.child.kill('SIGINT');
@@ -201,7 +310,16 @@ function createStudioServer(options = {}) {
         return json(res, 201, { project });
       }
       if (req.method === 'POST' && url.pathname === '/api/scripts/start') return json(res, 200, startSession(await readJson(req)));
-      if (req.method === 'POST' && url.pathname === '/api/scripts/stop') { await readJson(req); return json(res, 200, stopSession()); }
+      if (req.method === 'POST' && url.pathname === '/api/scripts/stop') { await readJson(req); return json(res, 200, await stopSession()); }
+      const recording = /^\/api\/recordings\/([a-f0-9-]+)(?:\/(pause|resume|save|cancel))?$/.exec(url.pathname);
+      if (recording && req.method === 'GET' && !recording[2]) {
+        const session = recordingSession(recording[1]);
+        return json(res, 200, recordingView(session, session.phase === 'paused' ? session.pausedSource : undefined));
+      }
+      if (recording?.[2] && req.method === 'POST') {
+        const payload = await readJson(req);
+        return json(res, 200, await recordingAction(recordingSession(recording[1]), recording[2], payload));
+      }
       if (req.method === 'POST' && url.pathname === '/api/backup') { ensureIdle(); await readJson(req); return json(res, 200, store.backup()); }
       if (req.method === 'POST' && url.pathname === '/api/datasets/parse') {
         const body = await readJson(req);
@@ -291,8 +409,19 @@ function createStudioServer(options = {}) {
         ensureIdle(); if (store.backup().error) throw new ApiError(409, 'Cần sao lưu thành công trước khi xóa project.');
         store.deleteProject(projectMatch[1]); store.backup(); return json(res, 200, { ok: true });
       }
-      if (req.method === 'GET' && ['/', '/index.html', '/styles.css', '/app.js', '/ui-bridge.js'].includes(url.pathname)) {
+      const tutorialImage = /^\/tutorial-images\/(first-project|dataset|record-start|record-paused|source|run|result|manage|backup)\.png$/.test(url.pathname);
+      if (req.method === 'GET' && (tutorialImage || ['/', '/index.html', '/styles.css', '/app.js', '/ui-bridge.js', '/recording.html', '/recording.js', '/recording.css', '/tutorial.html', '/tutorial.css'].includes(url.pathname))) {
         const file = path.join(root, 'manager/public', url.pathname === '/' ? 'index.html' : url.pathname.slice(1));
+        if (tutorialImage) {
+          let data;
+          try { data = await fs.promises.readFile(file); }
+          catch (error) {
+            if (error.code === 'ENOENT') throw new ApiError(404, 'Không tìm thấy ảnh hướng dẫn.');
+            throw error;
+          }
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+          return res.end(data);
+        }
         const types = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript' };
         res.writeHead(200, { 'Content-Type': `${types[path.extname(file)]}; charset=utf-8`, 'Cache-Control': 'no-store' });
         return fs.createReadStream(file).pipe(res);

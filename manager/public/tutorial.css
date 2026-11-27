@@ -1,0 +1,44 @@
+.tutorial-sidebar nav { padding-top: 14px; }
+.tutorial-sidebar nav a { justify-content: flex-start; }
+.tutorial-current { background: #513631; border-color: #785047; }
+.tutorial-layout {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 230px);
+  grid-template-areas: "heading toc" "content toc";
+  align-content: start;
+  align-items: start;
+  gap: 20px 32px;
+  padding: 28px clamp(18px, 3vw, 44px);
+}
+.tutorial-heading, .tutorial-content { width: min(100%, 860px); justify-self: center; }
+.tutorial-heading { grid-area: heading; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.tutorial-heading p { margin-bottom: 0; }
+.tutorial-toc { grid-area: toc; position: sticky; top: 28px; border-left: 1px solid var(--line); padding-left: 16px; }
+.tutorial-toc a { color: var(--muted); text-decoration: none; padding: 5px 0; }
+.tutorial-toc a:hover, .tutorial-toc a:focus-visible { color: var(--accent); text-decoration: underline; }
+.tutorial-layout:has(#project:target) a[href="#project"],
+.tutorial-layout:has(#dataset:target) a[href="#dataset"],
+.tutorial-layout:has(#record:target) a[href="#record"],
+.tutorial-layout:has(#source:target) a[href="#source"],
+.tutorial-layout:has(#run:target) a[href="#run"],
+.tutorial-layout:has(#manage:target) a[href="#manage"] { color: var(--accent); font-weight: 650; }
+.tutorial-content { grid-area: content; padding: 0; min-width: 0; }
+.tutorial-content section { margin-bottom: 32px; padding-bottom: 18px; border-bottom: 1px solid var(--line); scroll-margin-top: 18px; }
+.tutorial-content h2 { color: var(--accent); }
+.tutorial-content li { margin-bottom: 8px; }
+.tutorial-content :is(ol, ul) { padding-left: 24px; }
+.tutorial-content code { overflow-wrap: anywhere; }
+.tutorial-content figure { margin: 18px 0; }
+.tutorial-content img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+.tutorial-content figcaption { margin-top: 8px; color: var(--muted); font-size: .875rem; }
+@media (max-width: 1020px) {
+  .tutorial-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "toc" "content"; }
+  .tutorial-toc { position: static; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .tutorial-toc strong { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .tutorial-sidebar nav { padding: 8px 0; }
+  .tutorial-layout { padding-top: 20px; }
+}

@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { once } = require('node:events');
-const { parameterizeRecording } = require('../recording-data');
+const { parameterizeRecording, generatedCallTexts } = require('../recording-data');
+const { testBody, appendSteps } = require('../recording-draft');
 const { createStudioServer } = require('../server');
 const { hash } = require('../store');
 const options = { filename: '/tmp/project/login.ts', runtimeFile: path.resolve(__dirname, '../runtime/dataset.ts'), baseUrl: 'https://staging.example.com/login' };
@@ -35,6 +36,22 @@ test('recording extracts input data, navigation and expected values while retain
   assert.equal(next.variables.Username, 'new-user'); assert.equal(next.variables.Username_3, 'another-user');
   assert.equal(next.variables.URL_1, '/login'); assert.equal(next.variables.URL_1_2, '/logout');
 });
+test('resumed steps are appended inside the edited test and retain dataset conversion', () => {
+  const edited = recording.replace('new-user', 'fixed-user');
+  const added = "  await page.getByLabel('Username').fill('resumed-user');";
+  const draft = appendSteps(edited + '\n// end of script\n', added, options.filename);
+  const generatedCalls = new Set([
+    ...generatedCallTexts(recording, options.filename),
+    ...generatedCallTexts(appendSteps("test('draft', async () => {});", added, options.filename), options.filename),
+  ]);
+  const { source, variables } = parameterizeRecording(draft, { ...options, generatedCalls });
+  assert.match(source, /fill\('fixed-user'\)/);
+  assert.match(source, /fill\(data\("Username_2"\)\);\n}\);\n\/\/ end of script/);
+  assert.equal(variables.Username_2, 'resumed-user');
+  assert.ok(!Object.values(variables).includes('fixed-user'));
+  assert.throws(() => testBody(edited + '\n{', options.filename), /TypeScript/);
+});
+
 test('recording saves into the captured environment, shares datasets, and manual edits keep hardcode intact', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-recording-'));
   const app = createStudioServer({ dataDir: path.join(root, 'data'), scriptsDir: path.join(root, 'scripts'), localScriptsDir: path.join(root, 'local'), backupDir: path.join(root, 'backups'), cli: path.join(__dirname, 'fixtures/fake-playwright.cjs') });

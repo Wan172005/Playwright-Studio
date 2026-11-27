@@ -1,0 +1,70 @@
+.recording-page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+.recording-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+#recording-status {
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #323438;
+  color: var(--muted);
+  font-size: .8125rem;
+}
+#recording-status[data-phase="recording"] { background: #203f31; color: #a8edc5; }
+#recording-status[data-phase="paused"] { background: #503b1f; color: #ffda9d; }
+.recording-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.save-recording { background: #2b7352; border-color: #388760; font-weight: 650; }
+.save-recording:hover { background: #338660; }
+.cancel-recording { color: var(--red); }
+.recording-feedback > :not([hidden]):not(:empty) { display: block; margin: 8px 16px; }
+.recording-workspace {
+  padding: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+.recording-workspace.editing { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+#recording-desktop { width: 100%; height: 100%; min-height: 280px; border: 0; background: #161719; }
+.recording-editor {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--side);
+  border-left: 1px solid var(--line);
+}
+.recording-editor label { margin: 0; padding: 12px 16px; overflow-wrap: anywhere; }
+#recording-source {
+  flex: 1;
+  min-height: 220px;
+  width: 100%;
+  resize: none;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-inline: 0;
+  color: #e7ebf6;
+  background: #161821;
+  font: .875rem/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+#recording-source:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+#recording-help { margin: 0; padding: 10px 16px; font-size: .8125rem; }
+@media (min-width: 761px) {
+  .recording-page { height: 100dvh; }
+}
+@media (max-width: 760px) {
+  .recording-workspace.editing { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(280px, 46dvh) auto; }
+  .recording-buttons { margin-left: 0; }
+  .recording-editor { border-left: 0; border-top: 1px solid var(--line); }
+}
